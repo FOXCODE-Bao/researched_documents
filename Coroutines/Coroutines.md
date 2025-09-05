@@ -1,10 +1,10 @@
-# How works
-## What happens when calling `launch`
+# 1. How works
+## 1.1. What happens when calling `launch`
 When you call `launch`, you are **not creating a new OS thread**. Instead, you’re creating a small **coroutine object** (like a task) that the Kotlin coroutine library manages.
-## Suspending instead of blocking
+## 1.2. Suspending instead of blocking
 - **Thread sleep** → blocks the OS thread. That thread is unusable until it wakes up.
 - **`delay()`** → suspends the coroutine. The OS thread is released back to the pool, free to run other coroutines. Later, when the delay is over, the coroutine’s saved state (stack frame, continuation) is resumed on a thread again.
-## General mechanism
+## 1.3. General mechanism
 At a suspension point:
 1. Coroutine calls a suspending function.
 2. That suspending function checks: “Can I return a result immediately?”
@@ -19,7 +19,7 @@ Retrofit integrates with coroutines by wrapping its **callback-based API** into 
 
 ![[coroutine_flow.png]]
 
-## Under the hood
+## 1.4. Under the hood
 ``` kotlin
 suspend fun loginUser(userId: String, password: String): User {  
 	val user = userRemoteDataSource.logUserIn(userId, password)  
@@ -137,8 +137,8 @@ fun loginUser(userId: String?, password: String?, completion: Continuation<Any?>
 	}
 }
 ```
-# Fundamentals
-## `CoroutineScope`
+# 2. Fundamentals
+## 2.1. `CoroutineScope`
 A `CoroutineScope` keeps track of any coroutine you create using `launch` or `async`. They can be canceled by calling `scope.cancel()` at any point in time.
 
 >[!NOTE] 
@@ -147,28 +147,29 @@ A `CoroutineScope` keeps track of any coroutine you create using `launch` or `as
 >[!NOTE]
 >Coroutine scope doesn't create new coroutine, it manages coroutines
 
-## `CoroutineContext`
+## 2.2. `CoroutineContext`
 The `CoroutineContext` is a set of elements that define the behavior of a coroutine. Including:
 - `Job`  controls the lifecycle of the coroutine.
 - `CoroutineDispatcher:` dispatches work to the appropriate thread.
 - `CoroutineName:` name of the coroutine, useful for debugging.
-- `CoroutineExceptionHandler:` handles uncaught exceptions, [[will be covered in Part 3 of the series.]]
+- `CoroutineExceptionHandler:` handles uncaught exceptions, will be covered at [[Cancellation and Exception in Coroutines]].
 
 >[!NOTE] 
 >- `CoroutineContext` can be combined using the `+` operator
 >- Elements on the right side of the `+` will override those on the left, example:
 >	`(Dispatchers.Main, “name”) + (Dispatchers.IO) = (Dispatchers.IO, “name”)`
 
-## Job lifecycle
+## 2.3. Job lifecycle
 We can access properties of a Job: `isActive`, `isCancelled` and `isCompleted`.
 ![[job_lifecycle.webp]]
 
-## Nested `CoroutineContext`
+## 2.4. Nested `CoroutineContext`
 ___New coroutine context___ = Defaults + inherited `CoroutineContext` + arguments
 ___Inner coroutine context___ = parent `CoroutineContext` + `Job()`
 
-# Callback-based to Coroutine-based
-## `suspendCoroutine`
+# 3. Callback-based to Coroutine-based
+Distinguish with Flow-based ([[Flows#Callback-based to Flow-based]])
+## 3.1. `suspendCoroutine`
 ``` kotlin
 public suspend inline fun <T> suspendCoroutine(
     crossinline block: (Continuation<T>) -> Unit
@@ -200,7 +201,7 @@ launch {
 }
 ```
 
-## `suspendCancellableCoroutine`
+## 3.2. `suspendCancellableCoroutine`
 
 ``` kotlin
 public suspend inline fun <T> suspendCancellableCoroutine(
@@ -234,101 +235,3 @@ suspend fun Call<User>.await(): User =
         }
     }
 ```
-
-# Best practices
-## Inject dispatchers
-Don't hardcode `Dispatchers` when creating new coroutines or calling `withContext`.
-
-**Avoid**
-``` kotlin
-// DO NOT hardcode Dispatchers
-class NewsRepository {
- // DO NOT use Dispatchers.Default directly, inject it instead
- suspend fun loadNews() = withContext(Dispatchers.Default) { /* ... */ }
-}
-```
-
-**Use**
-``` kotlin
-class NewsRepository(
-    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
-) {
-    suspend fun loadNews() = withContext(defaultDispatcher) { /* ... */ }
-}
-```
-
-## Safely call suspend function from main thread
-For main safety, you should use `withContext` to switch thread for long running task in suspend functions
-
-## Data layers should expose suspend functions or flows
-- **Suspend functions for one-shot calls**
-- **Flow to notify about data changes**.
-``` kotlin
-class ExampleRepository {
-	suspend fun makeNetworkRequest() { /* ... */ }
-
-	fun getExamples(): Flow<Example> { /* ... */ }
-}
-```
-
-## Decision when creating coroutines
-If the work must be done in current screen, call it in caller's lifecycle such as: `viewModelScope` (in most case), `coroutineScope`, or `supervisorScope`
-``` kotlin
-class GetAllBooksAndAuthorsUseCase(
-    private val booksRepository: BooksRepository,
-) {
-    suspend fun getBooks(): List<Books> {
-        return coroutineScope {
-            val books = async { booksRepository.getAllBooks() }
-            books.await()
-        }
-    }
-}
-```
-
-If the must must be run as long as the app is opened, use external scope
-``` kotlin
-class ArticlesRepository(
-    private val articlesDataSource: ArticlesDataSource,
-    private val externalScope: CoroutineScope,
-) {
-    suspend fun bookmarkArticle(article: Article) {
-        externalScope.launch { articlesDataSource.bookmarkArticle(article) }
-            .join() // Wait for the coroutine to complete
-    }
-}
-```
-
-## Avoid `GlobalScope`
-Use external scope or inject dispatchers instead
-**Avoid**
-``` kotlin
-class ArticlesRepository(
-    private val articlesDataSource: ArticlesDataSource,
-) {
-    suspend fun bookmarkArticle(article: Article) {
-        GlobalScope.launch {
-            articlesDataSource.bookmarkArticle(article)
-        }
-            .join()
-    }
-```
-
-**Use**
-``` kotlin
-class ArticlesRepository(
-    private val articlesDataSource: ArticlesDataSource,
-    private val externalScope: CoroutineScope = GlobalScope,
-    private val defaultDispatcher: CoroutineDispatcher = Dispatchers.Default
-) {
-    suspend fun bookmarkArticle(article: Article) {
-        externalScope.launch(defaultDispatcher) {
-            articlesDataSource.bookmarkArticle(article)
-        }
-            .join()
-    }
-}
-```
-
-## Don't catch `CancellationException`
-You can catch every exception but do not catch `CancellationException` to enable coroutine cancellation (always rethrow them if caught)
